@@ -1,19 +1,19 @@
 package com.example.data.repository
 
-import com.example.data.local.DemoDataProvider
+import android.util.Log
 import com.example.data.local.LibrusDao
 import com.example.data.local.entities.GradeEntity
 import com.example.data.local.entities.HomeworkEntity
 import com.example.data.local.entities.LessonEntity
 import com.example.data.local.entities.StudentEntity
 import com.example.data.local.entities.TimetableEntity
+import com.example.data.model.CalendarEvent
 import com.example.data.model.Grade
-import com.example.data.model.Homework
 import com.example.data.model.Lesson
 import com.example.data.model.Student
 import com.example.data.model.TimetableEntry
-import com.example.data.remote.LibrusApiClient
-import com.example.data.remote.LibrusApiService
+import com.example.data.remote.LibrusAuthManager
+import com.example.data.remote.LibrusScraper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
@@ -21,9 +21,10 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
 class LibrusRepository(
-    private val dao: LibrusDao,
-    private val apiService: LibrusApiService = LibrusApiClient.service
+    private val dao: LibrusDao
 ) {
+    private val TAG = "LibrusRepository"
+
     val student: Flow<Student?> = dao.getStudent().map { it?.toDomain() }
 
     val grades: Flow<List<Grade>> = dao.getGrades().map { list ->
@@ -34,64 +35,66 @@ class LibrusRepository(
         list.map { it.toDomain() }
     }
 
+    fun getTimetableForWeek(weekOffset: Int): Flow<List<TimetableEntry>> {
+        return dao.getTimetableForWeek(weekOffset).map { list ->
+            list.map { it.toDomain() }
+        }
+    }
+
     val lessons: Flow<List<Lesson>> = dao.getLessons().map { list ->
         list.map { it.toDomain() }
     }
 
-    val homework: Flow<List<Homework>> = dao.getHomework().map { list ->
+    val calendarEvents: Flow<List<CalendarEvent>> = dao.getHomework().map { list ->
         list.map { it.toDomain() }
     }
 
-    suspend fun login(username: String, password: String, forceDemo: Boolean = false): Result<Student> = withContext(Dispatchers.IO) {
+    /**
+     * Authenticates with real Librus servers and fetches real data
+     */
+    suspend fun login(
+        username: String,
+        password: String,
+        sessionToken: String? = null
+    ): Result<Student> = withContext(Dispatchers.IO) {
         try {
-            if (forceDemo || username.equals("demo", ignoreCase = true) || username.isEmpty()) {
-                val demoStudent = DemoDataProvider.getDemoStudent()
-                seedDemoData(demoStudent)
-                return@withContext Result.success(demoStudent)
-            }
+            val client = LibrusAuthManager.getClient()
 
-            // Attempt official Librus Synergia OAuth Token endpoint
-            try {
-                val tokenResponse = apiService.getOAuthToken(
-                    username = username,
-                    password = password
-                )
-
-                if (tokenResponse.isSuccessful && tokenResponse.body()?.accessToken != null) {
-                    val token = tokenResponse.body()!!.accessToken!!
-                    val meResponse = apiService.getMe("Bearer $token")
-                    val me = meResponse.body()?.me
-                    val firstName = me?.user?.firstName ?: "Uczeń"
-                    val lastName = me?.user?.lastName ?: ""
-                    val classSymbol = me?.schoolClass?.symbol ?: "3B"
-                    val classNum = me?.schoolClass?.number?.toString() ?: ""
-
-                    val student = Student(
-                        id = me?.user?.login ?: username,
-                        name = "$firstName $lastName".trim(),
-                        schoolName = "Librus Synergia",
-                        className = "$classNum$classSymbol".trim().ifEmpty { "Klasa 3B" },
-                        login = username,
-                        isDemo = false,
-                        lastSyncTime = System.currentTimeMillis()
-                    )
-
-                    dao.insertStudent(StudentEntity.fromDomain(student))
-                    // Seed initial syllabus data for the session cache
-                    seedRealSessionData(student)
-                    return@withContext Result.success(student)
-                } else {
-                    val errorDesc = tokenResponse.body()?.errorDescription
-                        ?: "Błędne dane logowania w systemie Librus Synergia. Sprawdź login i hasło."
-                    return@withContext Result.failure(Exception(errorDesc))
+            // 1. Authenticate with credentials or session token
+            if (!sessionToken.isNullOrBlank()) {
+                val tokenResult = LibrusAuthManager.authorizeWithSessionCookie(sessionToken)
+                if (tokenResult.isFailure) {
+                    return@withContext Result.failure(tokenResult.exceptionOrNull() ?: Exception("Błąd tokena sesji"))
                 }
-            } catch (networkEx: Exception) {
-                // Network error or school gateway timeout
-                return@withContext Result.failure(
-                    Exception("Błąd połączenia z serwerem Librus: ${networkEx.localizedMessage ?: "Brak dostępu do sieci"}. Możesz zalogować się w trybie demonstracyjnym.")
+            } else {
+                val authResult = LibrusAuthManager.authorize(username, password)
+                if (authResult.isFailure) {
+                    return@withContext Result.failure(authResult.exceptionOrNull() ?: Exception("Błąd logowania w Librus"))
+                }
+            }
+
+            // 2. Fetch real student profile from Librus
+            val studentResult = LibrusScraper.scrapeAccountInfo(client, username)
+            val student = studentResult.getOrElse {
+                Student(
+                    id = username.ifBlank { "librus_user" },
+                    name = "Uczeń ($username)",
+                    schoolName = "Librus Synergia",
+                    className = "Klasa",
+                    login = username,
+                    isDemo = false,
+                    lastSyncTime = System.currentTimeMillis()
                 )
             }
+
+            dao.insertStudent(StudentEntity.fromDomain(student))
+
+            // 3. Fetch real lessons, multi-week timetable, grades, and terminarz from Librus servers
+            fetchAndSaveRealData(student)
+
+            Result.success(student)
         } catch (e: Exception) {
+            Log.e(TAG, "Login and fetch failed", e)
             Result.failure(e)
         }
     }
@@ -99,48 +102,90 @@ class LibrusRepository(
     suspend fun refreshData(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val currentStudent = dao.getStudent().firstOrNull()?.toDomain()
-            if (currentStudent == null) {
-                return@withContext Result.failure(Exception("Brak aktywnego profilu ucznia."))
-            }
+                ?: return@withContext Result.failure(Exception("Brak aktywnego profilu ucznia. Zaloguj się."))
 
-            // Update timestamp
             val updatedStudent = currentStudent.copy(lastSyncTime = System.currentTimeMillis())
             dao.insertStudent(StudentEntity.fromDomain(updatedStudent))
 
-            if (currentStudent.isDemo) {
-                // Re-sync demo data
-                dao.insertGrades(DemoDataProvider.getDemoGrades().map { GradeEntity.fromDomain(it) })
-                dao.insertTimetable(DemoDataProvider.getDemoTimetable().map { TimetableEntity.fromDomain(it) })
-                dao.insertLessons(DemoDataProvider.getDemoLessons().map { LessonEntity.fromDomain(it) })
-                dao.insertHomework(DemoDataProvider.getDemoHomework().map { HomeworkEntity.fromDomain(it) })
-            } else {
-                // Simulated API sync refresh with cache
-                seedRealSessionData(updatedStudent)
-            }
+            fetchAndSaveRealData(updatedStudent)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Refresh failed", e)
+            Result.failure(e)
+        }
+    }
 
+    suspend fun fetchTimetableWeek(weekOffset: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val client = LibrusAuthManager.getClient()
+            val ttResult = LibrusScraper.scrapeTimetable(client, weekOffset)
+            if (ttResult.isSuccess) {
+                val list = ttResult.getOrNull() ?: emptyList()
+                if (list.isNotEmpty()) {
+                    dao.clearTimetableForWeek(weekOffset)
+                    dao.insertTimetable(list.map { TimetableEntity.fromDomain(it) })
+                }
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
-    private suspend fun seedDemoData(student: Student) {
-        dao.insertStudent(StudentEntity.fromDomain(student))
-        dao.insertGrades(DemoDataProvider.getDemoGrades().map { GradeEntity.fromDomain(it) })
-        dao.insertTimetable(DemoDataProvider.getDemoTimetable().map { TimetableEntity.fromDomain(it) })
-        dao.insertLessons(DemoDataProvider.getDemoLessons().map { LessonEntity.fromDomain(it) })
-        dao.insertHomework(DemoDataProvider.getDemoHomework().map { HomeworkEntity.fromDomain(it) })
+    /**
+     * Connects to Librus Synergia to fetch and persist real student data
+     */
+    private suspend fun fetchAndSaveRealData(student: Student) {
+        val client = LibrusAuthManager.getClient()
+
+        // 1. Real Grades (with comprehensive selectors)
+        val gradesResult = LibrusScraper.scrapeGrades(client)
+        if (gradesResult.isSuccess) {
+            val gradesList = gradesResult.getOrNull() ?: emptyList()
+            if (gradesList.isNotEmpty()) {
+                dao.clearGrades()
+                dao.insertGrades(gradesList.map { GradeEntity.fromDomain(it) })
+            }
+        }
+
+        // 2. Real Timetable: Fetch BOTH current week (0) AND next week (1)
+        val currentWeekResult = LibrusScraper.scrapeTimetable(client, 0)
+        val nextWeekResult = LibrusScraper.scrapeTimetable(client, 1)
+
+        val allTimetableEntries = mutableListOf<TimetableEntity>()
+        if (currentWeekResult.isSuccess) {
+            allTimetableEntries.addAll(currentWeekResult.getOrNull().orEmpty().map { TimetableEntity.fromDomain(it) })
+        }
+        if (nextWeekResult.isSuccess) {
+            allTimetableEntries.addAll(nextWeekResult.getOrNull().orEmpty().map { TimetableEntity.fromDomain(it) })
+        }
+        if (allTimetableEntries.isNotEmpty()) {
+            dao.clearTimetable()
+            dao.insertTimetable(allTimetableEntries)
+        }
+
+        // 3. Real Lessons
+        val lessonsResult = LibrusScraper.scrapeLessons(client)
+        if (lessonsResult.isSuccess) {
+            val lessonsList = lessonsResult.getOrNull() ?: emptyList()
+            if (lessonsList.isNotEmpty()) {
+                dao.clearLessons()
+                dao.insertLessons(lessonsList.map { LessonEntity.fromDomain(it) })
+            }
+        }
+
+        // 4. Terminarz (replaces Zadania with full Librus Terminarz)
+        val calendarResult = LibrusScraper.scrapeTerminarz(client)
+        if (calendarResult.isSuccess) {
+            val eventsList = calendarResult.getOrNull() ?: emptyList()
+            if (eventsList.isNotEmpty()) {
+                dao.clearHomework()
+                dao.insertHomework(eventsList.map { HomeworkEntity.fromDomain(it) })
+            }
+        }
     }
 
-    private suspend fun seedRealSessionData(student: Student) {
-        dao.insertStudent(StudentEntity.fromDomain(student))
-        dao.insertGrades(DemoDataProvider.getDemoGrades().map { GradeEntity.fromDomain(it) })
-        dao.insertTimetable(DemoDataProvider.getDemoTimetable().map { TimetableEntity.fromDomain(it) })
-        dao.insertLessons(DemoDataProvider.getDemoLessons().map { LessonEntity.fromDomain(it) })
-        dao.insertHomework(DemoDataProvider.getDemoHomework().map { HomeworkEntity.fromDomain(it) })
-    }
-
-    suspend fun toggleHomework(id: String, completed: Boolean) = withContext(Dispatchers.IO) {
+    suspend fun toggleCalendarEvent(id: String, completed: Boolean) = withContext(Dispatchers.IO) {
         dao.updateHomeworkCompletion(id, completed)
     }
 
@@ -153,5 +198,6 @@ class LibrusRepository(
 
     suspend fun logout() = withContext(Dispatchers.IO) {
         dao.clearAllData()
+        LibrusAuthManager.cookieJar.clear()
     }
 }

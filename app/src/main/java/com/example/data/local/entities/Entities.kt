@@ -2,8 +2,8 @@ package com.example.data.local.entities
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import com.example.data.model.CalendarEvent
 import com.example.data.model.Grade
-import com.example.data.model.Homework
 import com.example.data.model.Lesson
 import com.example.data.model.Student
 import com.example.data.model.TimetableEntry
@@ -94,7 +94,8 @@ data class TimetableEntity(
     val teacher: String,
     val statusNote: String,
     val isCancelled: Boolean,
-    val isSubstitution: Boolean
+    val isSubstitution: Boolean,
+    val weekOffset: Int = 0
 ) {
     fun toDomain(): TimetableEntry = TimetableEntry(
         id = id,
@@ -106,7 +107,8 @@ data class TimetableEntity(
         teacher = teacher,
         statusNote = statusNote,
         isCancelled = isCancelled,
-        isSubstitution = isSubstitution
+        isSubstitution = isSubstitution,
+        weekOffset = weekOffset
     )
 
     companion object {
@@ -120,7 +122,8 @@ data class TimetableEntity(
             teacher = entry.teacher,
             statusNote = entry.statusNote,
             isCancelled = entry.isCancelled,
-            isSubstitution = entry.isSubstitution
+            isSubstitution = entry.isSubstitution,
+            weekOffset = entry.weekOffset
         )
     }
 }
@@ -169,27 +172,27 @@ data class HomeworkEntity(
     val teacher: String,
     val isCompleted: Boolean
 ) {
-    fun toDomain(): Homework = Homework(
+    fun toDomain(): CalendarEvent = CalendarEvent(
         id = id,
-        subject = subject,
-        topic = topic,
-        content = content,
-        deadline = deadline,
-        creationDate = creationDate,
+        title = subject,
+        category = topic.ifBlank { "Wydarzenie" },
+        description = content,
+        date = deadline,
         teacher = teacher,
+        timeRange = creationDate,
         isCompleted = isCompleted
     )
 
     companion object {
-        fun fromDomain(hw: Homework): HomeworkEntity = HomeworkEntity(
-            id = hw.id,
-            subject = hw.subject,
-            topic = hw.topic,
-            content = hw.content,
-            deadline = hw.deadline,
-            creationDate = hw.creationDate,
-            teacher = hw.teacher,
-            isCompleted = hw.isCompleted
+        fun fromDomain(event: CalendarEvent): HomeworkEntity = HomeworkEntity(
+            id = event.id,
+            subject = event.title,
+            topic = event.category,
+            content = event.description,
+            deadline = event.date,
+            creationDate = event.timeRange,
+            teacher = event.teacher,
+            isCompleted = event.isCompleted
         )
     }
 }

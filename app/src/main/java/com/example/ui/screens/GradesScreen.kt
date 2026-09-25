@@ -139,7 +139,7 @@ fun GradesScreen(
                         )
 
                         Text(
-                            text = "Liczba wystawionych ocen: ${filteredGrades.size}",
+                            text = "Liczba ocen: ${filteredGrades.size}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                         )
@@ -163,16 +163,16 @@ fun GradesScreen(
             }
         }
 
-        // Semester Filter Chips
+        // Semester Filter Chips (Default is 0 = Wszystkie, so user immediately sees all grades)
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 listOf(
-                    0 to "Wszystkie",
-                    1 to "Semestr 1",
-                    2 to "Semestr 2"
+                    0 to "Wszystkie (${grades.size})",
+                    1 to "Semestr 1 (${grades.count { it.semester == 1 }})",
+                    2 to "Semestr 2 (${grades.count { it.semester == 2 }})"
                 ).forEach { (sem, label) ->
                     FilterChip(
                         selected = selectedSemester == sem,
@@ -206,7 +206,7 @@ fun GradesScreen(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "Brak ocen w wybranym semestrze",
+                            text = "Brak zarejestrowanych ocen w wybranym semestrze",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -214,68 +214,17 @@ fun GradesScreen(
                     }
                 }
             }
-        }
+        } else {
+            items(groupedGrades.keys.toList(), key = { it }) { subjectName ->
+                val subjectGrades = groupedGrades[subjectName] ?: emptyList()
+                val subjectAverage = calculateWeightedAverage(subjectGrades)
 
-        // Subject Grade Cards
-        items(groupedGrades.entries.toList(), key = { it.key }) { (subject, subjectGrades) ->
-            val subjectAvg = calculateWeightedAverage(subjectGrades)
-            val avgColor = getGradeColor(subjectAvg)
-
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("subject_card_${subject}"),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 1.5.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = subject,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f)
-                        )
-
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = avgColor.copy(alpha = 0.15f)
-                        ) {
-                            Text(
-                                text = "Śr: ${String.format(Locale.US, "%.2f", subjectAvg)}",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = avgColor,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        subjectGrades.forEach { grade ->
-                            GradeBadge(
-                                grade = grade,
-                                onClick = { selectedGradeForDetails = grade }
-                            )
-                        }
-                    }
-                }
+                SubjectGradesCard(
+                    subjectName = subjectName,
+                    grades = subjectGrades,
+                    average = subjectAverage,
+                    onGradeClick = { selectedGradeForDetails = it }
+                )
             }
         }
 
@@ -284,218 +233,279 @@ fun GradesScreen(
         }
     }
 
-    // Grade Details Dialog
+    // Grade Details Modal
     selectedGradeForDetails?.let { grade ->
-        val gradeColor = getGradeColor(grade.numericValue)
+        GradeDetailDialog(
+            grade = grade,
+            onDismiss = { selectedGradeForDetails = null }
+        )
+    }
 
-        AlertDialog(
-            onDismissRequest = { selectedGradeForDetails = null },
-            icon = {
-                Box(
-                    modifier = Modifier
-                        .size(56.dp)
-                        .clip(CircleShape)
-                        .background(gradeColor.copy(alpha = 0.15f)),
-                    contentAlignment = Alignment.Center
+    // Grade Simulator Dialog
+    if (showSimulator) {
+        GradeSimulatorDialog(
+            currentGrades = filteredGrades,
+            currentAverage = overallAverage,
+            onDismiss = { showSimulator = false }
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun SubjectGradesCard(
+    subjectName: String,
+    grades: List<Grade>,
+    average: Double,
+    onGradeClick: (Grade) -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("subject_card_${subjectName.replace(" ", "_")}"),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = subjectName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+
+                // Subject Average Pill
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = getGradeColor(average).copy(alpha = 0.15f)
                 ) {
                     Text(
-                        text = grade.grade,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = gradeColor
+                        text = if (average > 0) String.format(Locale.US, "%.2f", average) else "–",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = getGradeColor(average),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                     )
                 }
-            },
-            title = {
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Grades list flow
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                grades.forEach { grade ->
+                    GradeBadge(
+                        grade = grade,
+                        onClick = { onGradeClick(grade) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun GradeDetailDialog(
+    grade: Grade,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Text(
                     text = grade.subject,
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DetailRow(label = "Kategoria:", value = grade.category)
-                    DetailRow(label = "Waga oceny:", value = "${grade.weight}")
-                    DetailRow(label = "Wartość numeryczna:", value = "${grade.numericValue}")
-                    DetailRow(label = "Data wpisu:", value = grade.date)
-                    DetailRow(label = "Nauczyciel:", value = grade.teacher)
-                    DetailRow(label = "Semestr:", value = "Semestr ${grade.semester}")
-                    if (grade.comment.isNotEmpty()) {
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                        Text(
-                            text = "Opis / komentarz:",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = grade.comment,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { selectedGradeForDetails = null },
-                    modifier = Modifier.testTag("close_grade_details_button")
-                ) {
-                    Text("Zamknij")
-                }
-            }
-        )
-    }
-
-    // What-If Grade Simulator Dialog
-    if (showSimulator) {
-        val subjects = remember(grades) { grades.map { it.subject }.distinct() }
-        var selectedSubject by remember { mutableStateOf(subjects.firstOrNull() ?: "Matematyka") }
-        var simGradeValue by remember { mutableDoubleStateOf(5.0) }
-        var simWeight by remember { mutableIntStateOf(3) }
-
-        val subjectCurrentGrades = remember(grades, selectedSubject) {
-            grades.filter { it.subject == selectedSubject }
-        }
-        val currentSubjectAvg = remember(subjectCurrentGrades) {
-            calculateWeightedAverage(subjectCurrentGrades)
-        }
-        val simulatedSubjectAvg = remember(subjectCurrentGrades, simGradeValue, simWeight) {
-            val totalWeight = subjectCurrentGrades.sumOf { it.weight } + simWeight
-            val totalScore = subjectCurrentGrades.sumOf { it.numericValue * it.weight } + (simGradeValue * simWeight)
-            if (totalWeight > 0) totalScore / totalWeight else 0.0
-        }
-
-        AlertDialog(
-            onDismissRequest = { showSimulator = false },
-            icon = {
-                Icon(
-                    imageVector = Icons.Default.Calculate,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(36.dp)
-                )
-            },
-            title = {
-                Text(
-                    text = "Symulator Ocen (Co jeśli?)",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                Surface(
+                    shape = CircleShape,
+                    color = getGradeColor(grade.numericValue).copy(alpha = 0.2f)
                 ) {
                     Text(
-                        text = "Sprawdź, jak potencjalna ocena wpłynie na Twoją średnią z wybranego przedmiotu.",
+                        text = grade.grade,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = getGradeColor(grade.numericValue),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                HorizontalDivider()
+                DetailRow(label = "Kategoria:", value = grade.category)
+                DetailRow(label = "Waga oceny:", value = "${grade.weight}")
+                DetailRow(label = "Wartość numeryczna:", value = String.format(Locale.US, "%.2f", grade.numericValue))
+                DetailRow(label = "Data wpisu:", value = grade.date)
+                DetailRow(label = "Nauczyciel:", value = grade.teacher)
+                DetailRow(label = "Semestr:", value = "Semestr ${grade.semester}")
+                if (grade.comment.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Komentarz / Opis:",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = grade.comment,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-
-                    // Subject Chips Flow
-                    Text(
-                        text = "Wybierz przedmiot:",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        subjects.take(6).forEach { subj ->
-                            FilterChip(
-                                selected = selectedSubject == subj,
-                                onClick = { selectedSubject = subj },
-                                label = { Text(subj, fontSize = 12.sp) }
-                            )
-                        }
-                    }
-
-                    // Proposed Grade Selector
-                    Text(
-                        text = "Symulowana ocena: ${simGradeValue.toInt()}",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        listOf(1.0, 2.0, 3.0, 4.0, 5.0, 6.0).forEach { gVal ->
-                            FilterChip(
-                                selected = simGradeValue == gVal,
-                                onClick = { simGradeValue = gVal },
-                                label = { Text("${gVal.toInt()}") }
-                            )
-                        }
-                    }
-
-                    // Weight Selector
-                    Text(
-                        text = "Waga oceny: $simWeight",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        listOf(1, 2, 3, 4, 5).forEach { w ->
-                            FilterChip(
-                                selected = simWeight == w,
-                                onClick = { simWeight = w },
-                                label = { Text("Waga $w") }
-                            )
-                        }
-                    }
-
-                    // Simulation Result Card
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceAround,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(text = "Aktualna średnia", style = MaterialTheme.typography.labelSmall)
-                                Text(
-                                    text = String.format(Locale.US, "%.2f", currentSubjectAvg),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 18.sp
-                                )
-                            }
-                            Text("➔", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(text = "Nowa średnia", style = MaterialTheme.typography.labelSmall)
-                                Text(
-                                    text = String.format(Locale.US, "%.2f", simulatedSubjectAvg),
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 20.sp,
-                                    color = if (simulatedSubjectAvg >= currentSubjectAvg) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                                )
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = { showSimulator = false },
-                    modifier = Modifier.testTag("close_simulator_dialog_button")
-                ) {
-                    Text("Zamknij")
                 }
             }
-        )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.testTag("close_grade_details_button")
+            ) {
+                Text("Zamknij")
+            }
+        }
+    )
+}
+
+@Composable
+fun GradeSimulatorDialog(
+    currentGrades: List<Grade>,
+    currentAverage: Double,
+    onDismiss: () -> Unit
+) {
+    var hypotheticalGrade by remember { mutableDoubleStateOf(5.0) }
+    var hypotheticalWeight by remember { mutableIntStateOf(2) }
+
+    val simulatedAverage = remember(currentGrades, hypotheticalGrade, hypotheticalWeight) {
+        val totalCurrentWeight = currentGrades.sumOf { it.weight }
+        val currentSum = currentGrades.sumOf { it.numericValue * it.weight }
+        val newSum = currentSum + (hypotheticalGrade * hypotheticalWeight)
+        val newWeight = totalCurrentWeight + hypotheticalWeight
+        if (newWeight > 0) newSum / newWeight else currentAverage
     }
+
+    val diff = simulatedAverage - currentAverage
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Symulator średniej",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text(
+                    text = "Sprawdź jak przyszła ocena wpłynie na Twoją średnią ważoną:",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                // Current vs Projected
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceAround,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Aktualna", style = MaterialTheme.typography.labelMedium)
+                            Text(
+                                text = if (currentAverage > 0) String.format(Locale.US, "%.2f", currentAverage) else "–",
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Text("➔", fontSize = 20.sp, color = MaterialTheme.colorScheme.primary)
+
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Po dodaniu", style = MaterialTheme.typography.labelMedium)
+                            Text(
+                                text = String.format(Locale.US, "%.2f", simulatedAverage),
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = if (diff >= 0) Color(0xFF1E8E3E) else Color(0xFFD93025)
+                            )
+                        }
+                    }
+                }
+
+                // Grade Selector
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Planowana ocena:", style = MaterialTheme.typography.labelMedium)
+                        Text("${hypotheticalGrade.toInt()}", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    }
+                    Slider(
+                        value = hypotheticalGrade.toFloat(),
+                        onValueChange = { hypotheticalGrade = it.toInt().toDouble() },
+                        valueRange = 1f..6f,
+                        steps = 4,
+                        modifier = Modifier.testTag("simulator_grade_slider")
+                    )
+                }
+
+                // Weight Selector
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Waga oceny:", style = MaterialTheme.typography.labelMedium)
+                        Text("$hypotheticalWeight", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    }
+                    Slider(
+                        value = hypotheticalWeight.toFloat(),
+                        onValueChange = { hypotheticalWeight = it.toInt() },
+                        valueRange = 1f..5f,
+                        steps = 3,
+                        modifier = Modifier.testTag("simulator_weight_slider")
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                modifier = Modifier.testTag("close_simulator_button")
+            ) {
+                Text("Gotowe")
+            }
+        }
+    )
 }
 
 @Composable
@@ -506,13 +516,13 @@ fun DetailRow(label: String, value: String) {
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
             text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurface
         )
     }
@@ -521,6 +531,6 @@ fun DetailRow(label: String, value: String) {
 private fun calculateWeightedAverage(grades: List<Grade>): Double {
     val totalWeight = grades.sumOf { it.weight }
     if (totalWeight == 0) return 0.0
-    val totalScore = grades.sumOf { it.numericValue * it.weight }
-    return totalScore / totalWeight
+    val totalSum = grades.sumOf { it.numericValue * it.weight }
+    return totalSum / totalWeight
 }

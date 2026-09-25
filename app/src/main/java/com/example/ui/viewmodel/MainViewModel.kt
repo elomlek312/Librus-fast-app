@@ -5,8 +5,8 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.AppDatabase
+import com.example.data.model.CalendarEvent
 import com.example.data.model.Grade
-import com.example.data.model.Homework
 import com.example.data.model.Lesson
 import com.example.data.model.Student
 import com.example.data.model.SyncState
@@ -26,7 +26,7 @@ enum class LibrusTab(val title: String) {
     GRADES("Oceny"),
     TIMETABLE("Plan lekcji"),
     LESSONS("Lekcje"),
-    HOMEWORK("Zadania"),
+    TERMINARZ("Terminarz"),
     SETTINGS("Więcej")
 }
 
@@ -66,7 +66,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = emptyList()
     )
 
-    val homework: StateFlow<List<Homework>> = repository.homework.stateIn(
+    val calendarEvents: StateFlow<List<CalendarEvent>> = repository.calendarEvents.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
@@ -94,8 +94,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _selectedDayOfWeek = MutableStateFlow(determineInitialDayOfWeek())
     val selectedDayOfWeek: StateFlow<Int> = _selectedDayOfWeek.asStateFlow()
 
+    // Timetable selected week (0 = Bieżący tydzień, 1 = Następny tydzień)
+    private val _selectedWeekOffset = MutableStateFlow(0)
+    val selectedWeekOffset: StateFlow<Int> = _selectedWeekOffset.asStateFlow()
+
     // Grades semester filter (0 = all, 1 = sem 1, 2 = sem 2)
-    private val _gradeSemesterFilter = MutableStateFlow(1)
+    private val _gradeSemesterFilter = MutableStateFlow(0)
     val gradeSemesterFilter: StateFlow<Int> = _gradeSemesterFilter.asStateFlow()
 
     // Login Form State
@@ -104,10 +108,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isAuthenticating = MutableStateFlow(false)
     val isAuthenticating: StateFlow<Boolean> = _isAuthenticating.asStateFlow()
-
-    init {
-        // If app has active cached student and is locked, we can trigger biometrics prompt when activity is ready
-    }
 
     private fun determineInitialDayOfWeek(): Int {
         val cal = Calendar.getInstance()
@@ -129,6 +129,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _selectedDayOfWeek.value = day
     }
 
+    fun setSelectedWeekOffset(offset: Int) {
+        _selectedWeekOffset.value = offset
+        viewModelScope.launch {
+            repository.fetchTimetableWeek(offset)
+        }
+    }
+
     fun setGradeSemesterFilter(semester: Int) {
         _gradeSemesterFilter.value = semester
     }
@@ -146,55 +153,63 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun promptBiometricUnlock(activity: FragmentActivity) {
-        val status = BiometricHelper.checkBiometricAvailability(activity)
-        if (status == BiometricHelper.BiometricStatus.AVAILABLE) {
-            BiometricHelper.showBiometricPrompt(
-                activity = activity,
-                title = "Autoryzacja odciskiem palca",
-                subtitle = "Potwierdź tożsamość, aby uzyskać dostęp do ocen i planu lekcji",
-                negativeButtonText = "Wpisz kod PIN",
-                onSuccess = {
-                    _isAppLocked.value = false
-                    _biometricError.value = null
-                },
-                onError = { err ->
-                    _biometricError.value = err
-                }
-            )
-        } else {
-            // Biometric not enrolled or hardware unavailable -> fallback
-            _biometricError.value = "Czytnik biometryczny jest niedostępny lub nie skonfigurowano odcisku palca. Użyj kodu PIN (Domyślny PIN: 1234)."
-        }
-    }
-
-    fun unlockWithPin(pin: String): Boolean {
-        // Standard student PIN verification
-        if (pin == "1234" || pin == "0000" || pin.length == 4) {
-            _isAppLocked.value = false
-            _biometricError.value = null
-            return true
-        }
-        _biometricError.value = "Nieprawidłowy kod PIN. Spróbuj: 1234"
-        return false
-    }
-
     fun lockApp() {
         if (_isBiometricEnabled.value) {
             _isAppLocked.value = true
+            _biometricError.value = null
         }
     }
 
-    fun login(username: String, password: String, isDemo: Boolean) {
+    fun unlockWithPin(enteredPin: String): Boolean {
+        return if (enteredPin == "1234" || enteredPin.length == 4) {
+            _isAppLocked.value = false
+            _biometricError.value = null
+            true
+        } else {
+            _biometricError.value = "Nieprawidłowy kod PIN (1234)"
+            false
+        }
+    }
+
+    fun promptBiometricUnlock(activity: FragmentActivity) {
+        BiometricHelper.showBiometricPrompt(
+            activity = activity,
+            title = "Odblokuj Synergia Student",
+            subtitle = "Dotknij czytnika linii papilarnych",
+            onSuccess = {
+                _isAppLocked.value = false
+                _biometricError.value = null
+            },
+            onError = { err ->
+                _biometricError.value = err
+            }
+        )
+    }
+
+    fun login(username: String, password: String) {
         viewModelScope.launch {
             _isAuthenticating.value = true
             _loginErrorMessage.value = null
-            val result = repository.login(username, password, forceDemo = isDemo)
+            val result = repository.login(username, password)
             _isAuthenticating.value = false
             result.onSuccess {
-                _syncState.value = SyncState.Success("Pomyślnie zalogowano do Librus!")
+                _syncState.value = SyncState.Success("Pomyślnie połączono z Librus Synergia!")
             }.onFailure { ex ->
                 _loginErrorMessage.value = ex.message ?: "Błąd logowania"
+            }
+        }
+    }
+
+    fun loginWithSessionToken(token: String, username: String) {
+        viewModelScope.launch {
+            _isAuthenticating.value = true
+            _loginErrorMessage.value = null
+            val result = repository.login(username, "", sessionToken = token)
+            _isAuthenticating.value = false
+            result.onSuccess {
+                _syncState.value = SyncState.Success("Pomyślnie zalogowano tokenem sesji DZIENNIKSID!")
+            }.onFailure { ex ->
+                _loginErrorMessage.value = ex.message ?: "Błąd tokena sesji"
             }
         }
     }
@@ -204,31 +219,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _syncState.value = SyncState.Syncing
             val result = repository.refreshData()
             result.onSuccess {
-                _syncState.value = SyncState.Success("Zaktualizowano dane ucznia!")
+                _syncState.value = SyncState.Success("Zaktualizowano dane z serwerów Librus!")
             }.onFailure { ex ->
-                _syncState.value = SyncState.Error(ex.message ?: "Błąd synchronizacji. Wyświetlanie danych z pamięci podręcznej.")
+                _syncState.value = SyncState.Error(ex.message ?: "Błąd synchronizacji")
             }
         }
     }
 
-    fun toggleHomeworkCompletion(id: String, completed: Boolean) {
+    fun toggleCalendarEventCompletion(id: String, completed: Boolean) {
         viewModelScope.launch {
-            repository.toggleHomework(id, completed)
+            repository.toggleCalendarEvent(id, completed)
         }
     }
 
     fun clearCache() {
         viewModelScope.launch {
             repository.clearCache()
-            _syncState.value = SyncState.Success("Wyczyszczono pamięć podręczną.")
+            _syncState.value = SyncState.Success("Wyczyszczono pamięć podręczną")
         }
     }
 
     fun logout() {
         viewModelScope.launch {
             repository.logout()
-            _syncState.value = SyncState.Idle
-            _currentTab.value = LibrusTab.GRADES
+            _isAppLocked.value = false
         }
     }
 

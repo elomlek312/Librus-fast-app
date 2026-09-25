@@ -33,7 +33,8 @@ data class TimetableEntry(
     val teacher: String,
     val statusNote: String = "Planowa",
     val isCancelled: Boolean = false,
-    val isSubstitution: Boolean = false
+    val isSubstitution: Boolean = false,
+    val weekOffset: Int = 0     // 0 = bieżący tydzień, 1 = przyszły tydzień, -1 = poprzedni tydzień
 )
 
 data class Lesson(
@@ -46,16 +47,21 @@ data class Lesson(
     val attendance: String = "Obecność" // "Obecność", "Spóźnienie", "Nieobecność", "Usprawiedliwiona"
 )
 
-data class Homework(
+// Represents an event in Terminarz (librus terminarz / sprawdziany / wydarzenia / zadania domowe)
+data class CalendarEvent(
     val id: String,
-    val subject: String,
-    val topic: String,
-    val content: String,
-    val deadline: String,       // e.g. "2026-09-28"
-    val creationDate: String,   // e.g. "2026-09-22"
-    val teacher: String,
+    val date: String,           // e.g. "2026-09-28"
+    val title: String,          // Title or subject
+    val category: String,       // e.g. "Sprawdzian", "Kartkówka", "Zadanie domowe", "Wydarzenie"
+    val description: String = "",
+    val teacher: String = "",
+    val lessonNumber: String = "",
+    val timeRange: String = "",
     val isCompleted: Boolean = false
 )
+
+// Legacy alias to keep compatibility if needed
+typealias Homework = CalendarEvent
 
 sealed class SyncState {
     data object Idle : SyncState()

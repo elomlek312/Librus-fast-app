@@ -36,11 +36,17 @@ interface LibrusDao {
     suspend fun clearGrades()
 
     // Timetable
-    @Query("SELECT * FROM timetable_entries ORDER BY dayOfWeek ASC, period ASC")
+    @Query("SELECT * FROM timetable_entries ORDER BY weekOffset ASC, dayOfWeek ASC, period ASC")
     fun getTimetable(): Flow<List<TimetableEntity>>
+
+    @Query("SELECT * FROM timetable_entries WHERE weekOffset = :weekOffset ORDER BY dayOfWeek ASC, period ASC")
+    fun getTimetableForWeek(weekOffset: Int): Flow<List<TimetableEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTimetable(entries: List<TimetableEntity>)
+
+    @Query("DELETE FROM timetable_entries WHERE weekOffset = :weekOffset")
+    suspend fun clearTimetableForWeek(weekOffset: Int)
 
     @Query("DELETE FROM timetable_entries")
     suspend fun clearTimetable()
@@ -55,11 +61,11 @@ interface LibrusDao {
     @Query("DELETE FROM lessons")
     suspend fun clearLessons()
 
-    // Homework
+    // Terminarz / CalendarEvents / Homework
     @Query("SELECT * FROM homework ORDER BY deadline ASC")
     fun getHomework(): Flow<List<HomeworkEntity>>
 
-    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertHomework(homeworkList: List<HomeworkEntity>)
 
     @Query("UPDATE homework SET isCompleted = :completed WHERE id = :id")

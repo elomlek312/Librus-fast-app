@@ -1,9 +1,10 @@
 package com.example
 
 import android.os.Bundle
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -16,26 +17,19 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.Grade
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Grade
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -46,10 +40,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
@@ -58,43 +52,43 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.model.SyncState
 import com.example.ui.components.SyncStatusBar
 import com.example.ui.screens.BiometricLockScreen
 import com.example.ui.screens.GradesScreen
-import com.example.ui.screens.HomeworkScreen
 import com.example.ui.screens.LessonsScreen
 import com.example.ui.screens.LoginScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.TerminarzScreen
 import com.example.ui.screens.TimetableScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.LibrusTab
 import com.example.ui.viewmodel.MainViewModel
 
-class MainActivity : FragmentActivity() {
+class MainActivity : AppCompatActivity() {
+
+    private val viewModel: MainViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         setContent {
-            val viewModel: MainViewModel = viewModel()
-
             val darkModeSetting by viewModel.darkModeSetting.collectAsStateWithLifecycle()
             val useDarkTheme = when (darkModeSetting) {
-                "LIGHT" -> false
                 "DARK" -> true
+                "LIGHT" -> false
                 else -> isSystemInDarkTheme()
             }
 
             MyApplicationTheme(darkTheme = useDarkTheme) {
-                MainAppContent(
-                    activity = this,
-                    viewModel = viewModel
-                )
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    SynergiaApp(activity = this, viewModel = viewModel)
+                }
             }
         }
     }
@@ -102,48 +96,40 @@ class MainActivity : FragmentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainAppContent(
-    activity: FragmentActivity,
+fun SynergiaApp(
+    activity: MainActivity,
     viewModel: MainViewModel
 ) {
     val student by viewModel.student.collectAsStateWithLifecycle()
     val isAppLocked by viewModel.isAppLocked.collectAsStateWithLifecycle()
-    val biometricError by viewModel.biometricError.collectAsStateWithLifecycle()
     val isBiometricEnabled by viewModel.isBiometricEnabled.collectAsStateWithLifecycle()
+    val biometricError by viewModel.biometricError.collectAsStateWithLifecycle()
 
     val currentTab by viewModel.currentTab.collectAsStateWithLifecycle()
     val grades by viewModel.grades.collectAsStateWithLifecycle()
     val timetable by viewModel.timetable.collectAsStateWithLifecycle()
     val lessons by viewModel.lessons.collectAsStateWithLifecycle()
-    val homework by viewModel.homework.collectAsStateWithLifecycle()
-
+    val calendarEvents by viewModel.calendarEvents.collectAsStateWithLifecycle()
     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
+
     val selectedDayOfWeek by viewModel.selectedDayOfWeek.collectAsStateWithLifecycle()
+    val selectedWeekOffset by viewModel.selectedWeekOffset.collectAsStateWithLifecycle()
     val gradeSemesterFilter by viewModel.gradeSemesterFilter.collectAsStateWithLifecycle()
     val darkModeSetting by viewModel.darkModeSetting.collectAsStateWithLifecycle()
 
-    val loginErrorMessage by viewModel.loginErrorMessage.collectAsStateWithLifecycle()
     val isAuthenticating by viewModel.isAuthenticating.collectAsStateWithLifecycle()
-
-    // Handle Android system Back button when navigating secondary tabs
-    BackHandler(enabled = currentTab != LibrusTab.GRADES && student != null && !isAppLocked) {
-        viewModel.selectTab(LibrusTab.GRADES)
-    }
-
-    // Auto prompt biometric when app is locked and student is logged in
-    LaunchedEffect(isAppLocked, student) {
-        if (isAppLocked && student != null && isBiometricEnabled) {
-            viewModel.promptBiometricUnlock(activity)
-        }
-    }
+    val loginErrorMessage by viewModel.loginErrorMessage.collectAsStateWithLifecycle()
 
     when {
         student == null -> {
             LoginScreen(
                 isAuthenticating = isAuthenticating,
                 errorMessage = loginErrorMessage,
-                onLogin = { user, pass, isDemo ->
-                    viewModel.login(user, pass, isDemo)
+                onLogin = { user, pass ->
+                    viewModel.login(user, pass)
+                },
+                onLoginWithToken = { token, user ->
+                    viewModel.loginWithSessionToken(token, user)
                 }
             )
         }
@@ -237,7 +223,7 @@ fun MainAppContent(
                                             LibrusTab.GRADES -> if (isSelected) Icons.Filled.Grade else Icons.Outlined.Grade
                                             LibrusTab.TIMETABLE -> if (isSelected) Icons.Filled.CalendarMonth else Icons.Outlined.CalendarMonth
                                             LibrusTab.LESSONS -> if (isSelected) Icons.Filled.Book else Icons.Outlined.Book
-                                            LibrusTab.HOMEWORK -> if (isSelected) Icons.Filled.Assignment else Icons.Outlined.Assignment
+                                            LibrusTab.TERMINARZ -> if (isSelected) Icons.Filled.Event else Icons.Outlined.Event
                                             LibrusTab.SETTINGS -> if (isSelected) Icons.Filled.Settings else Icons.Outlined.Settings
                                         },
                                         contentDescription = tab.title
@@ -288,17 +274,19 @@ fun MainAppContent(
                                 TimetableScreen(
                                     timetable = timetable,
                                     selectedDay = selectedDayOfWeek,
-                                    onDaySelected = { viewModel.setSelectedDayOfWeek(it) }
+                                    selectedWeekOffset = selectedWeekOffset,
+                                    onDaySelected = { viewModel.setSelectedDayOfWeek(it) },
+                                    onWeekOffsetSelected = { viewModel.setSelectedWeekOffset(it) }
                                 )
                             }
                             LibrusTab.LESSONS -> {
                                 LessonsScreen(lessons = lessons)
                             }
-                            LibrusTab.HOMEWORK -> {
-                                HomeworkScreen(
-                                    homeworkList = homework,
+                            LibrusTab.TERMINARZ -> {
+                                TerminarzScreen(
+                                    eventsList = calendarEvents,
                                     onToggleCompletion = { id, comp ->
-                                        viewModel.toggleHomeworkCompletion(id, comp)
+                                        viewModel.toggleCalendarEventCompletion(id, comp)
                                     }
                                 )
                             }
@@ -312,7 +300,7 @@ fun MainAppContent(
                                     onSelectDarkMode = { viewModel.setDarkModeSetting(it) },
                                     gradesCount = grades.size,
                                     timetableCount = timetable.size,
-                                    homeworkCount = homework.size,
+                                    homeworkCount = calendarEvents.size,
                                     onSyncNow = { viewModel.refreshData() },
                                     onClearCache = { viewModel.clearCache() },
                                     onLogout = { viewModel.logout() }

@@ -4,16 +4,15 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.AppDatabase
-import com.example.data.local.DemoDataProvider
 import com.example.data.local.entities.GradeEntity
 import com.example.data.local.entities.HomeworkEntity
 import com.example.data.local.entities.StudentEntity
+import com.example.data.local.entities.TimetableEntity
 import com.example.data.repository.LibrusRepository
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -52,36 +51,79 @@ class ExampleRobolectricTest {
 
     @Test
     fun `test offline cache persistence in Room database`() = runBlocking {
-        val demoStudent = DemoDataProvider.getDemoStudent()
-        val loginResult = repository.login("demo", "demo", forceDemo = true)
-
-        assertTrue(loginResult.isSuccess)
+        val student = StudentEntity(
+            id = "test_user_1",
+            name = "Uczeń Testowy",
+            schoolName = "I LO",
+            className = "3A",
+            login = "test_user_1",
+            isDemo = false,
+            lastSyncTime = System.currentTimeMillis()
+        )
+        database.librusDao().insertStudent(student)
 
         val cachedStudent = repository.student.first()
         assertNotNull(cachedStudent)
-        assertEquals("Jan Kowalski", cachedStudent?.name)
-        assertEquals("7294819u", cachedStudent?.login)
+        assertEquals("Uczeń Testowy", cachedStudent?.name)
+        assertEquals("test_user_1", cachedStudent?.login)
 
-        val cachedGrades = repository.grades.first()
-        assertTrue(cachedGrades.isNotEmpty())
+        // Test Terminarz / Calendar event persistence
+        val hw = HomeworkEntity(
+            id = "event_1",
+            subject = "Matematyka",
+            topic = "Sprawdzian",
+            content = "Funkcje kwadratowe i wielomiany",
+            deadline = "2026-09-28",
+            creationDate = "Terminarz szkolny",
+            teacher = "prof. Kowal",
+            isCompleted = false
+        )
+        database.librusDao().insertHomework(listOf(hw))
 
-        val cachedTimetable = repository.timetable.first()
-        assertTrue(cachedTimetable.isNotEmpty())
+        val cachedEvents = repository.calendarEvents.first()
+        assertEquals(1, cachedEvents.size)
+        assertEquals("Matematyka", cachedEvents[0].title)
+        assertEquals("Sprawdzian", cachedEvents[0].category)
 
-        val cachedHomework = repository.homework.first()
-        assertTrue(cachedHomework.isNotEmpty())
-    }
+        repository.toggleCalendarEvent("event_1", true)
+        val updatedEvents = repository.calendarEvents.first()
+        assertTrue(updatedEvents[0].isCompleted)
 
-    @Test
-    fun `test homework toggle persistence in Room database`() = runBlocking {
-        repository.login("demo", "demo", forceDemo = true)
-        val initialHw = repository.homework.first()
-        val firstItem = initialHw.first()
+        // Test Multi-week timetable
+        val currentWeekLesson = TimetableEntity(
+            id = "tt_curr_1",
+            dayOfWeek = 1,
+            period = 1,
+            timeRange = "08:00 - 08:45",
+            subject = "Informatyka",
+            classroom = "Sala 101",
+            teacher = "prof. Nowak",
+            statusNote = "Planowa",
+            isCancelled = false,
+            isSubstitution = false,
+            weekOffset = 0
+        )
+        val nextWeekLesson = TimetableEntity(
+            id = "tt_next_1",
+            dayOfWeek = 1,
+            period = 1,
+            timeRange = "08:00 - 08:45",
+            subject = "Matematyka",
+            classroom = "Sala 204",
+            teacher = "prof. Kowal",
+            statusNote = "Planowa",
+            isCancelled = false,
+            isSubstitution = false,
+            weekOffset = 1
+        )
+        database.librusDao().insertTimetable(listOf(currentWeekLesson, nextWeekLesson))
 
-        repository.toggleHomework(firstItem.id, !firstItem.isCompleted)
-        val updatedHw = repository.homework.first()
-        val updatedItem = updatedHw.first { it.id == firstItem.id }
+        val currentWeekList = repository.getTimetableForWeek(0).first()
+        assertEquals(1, currentWeekList.size)
+        assertEquals("Informatyka", currentWeekList[0].subject)
 
-        assertEquals(!firstItem.isCompleted, updatedItem.isCompleted)
+        val nextWeekList = repository.getTimetableForWeek(1).first()
+        assertEquals(1, nextWeekList.size)
+        assertEquals("Matematyka", nextWeekList[0].subject)
     }
 }

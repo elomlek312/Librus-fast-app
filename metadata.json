@@ -1,0 +1,6 @@
+{
+  "name": "Synergia Student",
+  "description": "Student gradebook, timetables, lessons, homework assignments, and biometric security with offline cache.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
